@@ -1,115 +1,36 @@
-#============================#
-#  ALEXBELGIUM'S DOCKERFILE  #
-#============================#
-#           _.------.
-#       _.-`    ('>.-`"""-.
-# '.--'`       _'`   _ .--.)
-#    -'         '-.-';`   `
-#    ' -      _.'  ``'--.
-#        '---`    .-'""`
-#               /`
-#=== Home Assistant Addon ===#
+# From original Dockerfile at https://github.com/TheCommsChannel/TC2-BBS-mesh
+FROM debian:stable-slim AS build
 
-#################
-# 1 Build Image #
-#################
+RUN apt-get update && \
+  apt-get install -y \
+  git \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-ARG BUILD_FROM
-ARG BUILD_VERSION
-FROM ${BUILD_FROM}
+# Clone the repository
+RUN git clone https://github.com/TheCommsChannel/TC2-BBS-mesh.git
 
-##################
-# 2 Modify Image #
-##################
+####
 
-# Set S6 wait time
-ENV S6_CMD_WAIT_FOR_SERVICES=1 \
-    S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
-    S6_SERVICES_GRACETIME=0
+FROM --platform=$BUILDPLATFORM python:alpine
 
+# Switch to non-root user
+RUN adduser --disabled-password mesh
+USER mesh
+RUN mkdir -p /home/mesh/bbs
+WORKDIR /home/mesh/bbs
 
-USER root
+# Install Python dependencies
+COPY --from=build /TC2-BBS-mesh/requirements.txt ./
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
-RUN \
-    sed -i "s/word = re.sub.*/word = re.sub(r'[^A-Za-z0-9 ]+', '', word)/g" /whoogle/app/utils/results.py
+# Copy over app code
+COPY --from=build /TC2-BBS-mesh/*.py ./
 
-##################
-# 3 Install apps #
-##################
+# Define config volume
+VOLUME /home/mesh/bbs/config
+WORKDIR /home/mesh/bbs/config
+COPY --from=build /TC2-BBS-mesh/example_config.ini ./config.ini
+COPY --from=build /TC2-BBS-mesh/fortunes.txt ./
 
-# Copy local files
-COPY rootfs/ /
-
-# Uses /bin for compatibility purposes
-# hadolint ignore=DL4005
-RUN if [ ! -f /bin/sh ] && [ -f /usr/bin/sh ]; then ln -s /usr/bin/sh /bin/sh; fi && \
-    if [ ! -f /bin/bash ] && [ -f /usr/bin/bash ]; then ln -s /usr/bin/bash /bin/bash; fi
-
-# Modules
-ARG MODULES="00-banner.sh 01-custom_script.sh 00-global_var.sh"
-
-# Automatic modules download
-ADD "https://raw.githubusercontent.com/alexbelgium/hassio-addons/master/.templates/ha_automodules.sh" "/ha_automodules.sh"
-RUN chmod 744 /ha_automodules.sh && /ha_automodules.sh "$MODULES" && rm /ha_automodules.sh
-
-# Manual apps
-ENV PACKAGES=""
-
-# Automatic apps & bashio
-ADD "https://raw.githubusercontent.com/alexbelgium/hassio-addons/master/.templates/ha_autoapps.sh" "/ha_autoapps.sh"
-RUN chmod 744 /ha_autoapps.sh && /ha_autoapps.sh "$PACKAGES" && rm /ha_autoapps.sh
-
-################
-# 4 Entrypoint #
-################
-
-# Add entrypoint
-ENV S6_STAGE2_HOOK=/ha_entrypoint.sh
-ADD "https://raw.githubusercontent.com/alexbelgium/hassio-addons/master/.templates/ha_entrypoint.sh" "/ha_entrypoint.sh"
-
-# Entrypoint modifications
-ADD "https://raw.githubusercontent.com/alexbelgium/hassio-addons/master/.templates/ha_entrypoint_modif.sh" "/ha_entrypoint_modif.sh"
-RUN chmod 777 /ha_entrypoint.sh /ha_entrypoint_modif.sh && /ha_entrypoint_modif.sh && rm /ha_entrypoint_modif.sh
-
-# Standalone bashio command
-ADD "https://raw.githubusercontent.com/alexbelgium/hassio-addons/master/.templates/bashio-standalone.sh" "/.bashio-standalone.sh"
-RUN chmod 777 /.bashio-standalone.sh
-
-
-ENTRYPOINT [ "/usr/bin/env" ]
-CMD [ "/ha_entrypoint.sh" ]
-
-############
-# 5 Labels #
-############
-
-ARG BUILD_ARCH
-ARG BUILD_DATE
-ARG BUILD_DESCRIPTION
-ARG BUILD_NAME
-ARG BUILD_REF
-ARG BUILD_REPOSITORY
-ARG BUILD_VERSION
-ENV BUILD_VERSION="${BUILD_VERSION}"
-LABEL \
-    io.hass.name="${BUILD_NAME}" \
-    io.hass.description="${BUILD_DESCRIPTION}" \
-    io.hass.arch="${BUILD_ARCH}" \
-    io.hass.type="addon" \
-    io.hass.version=${BUILD_VERSION} \
-    maintainer="alexbelgium (https://github.com/alexbelgium)" \
-    org.opencontainers.image.title="${BUILD_NAME}" \
-    org.opencontainers.image.description="${BUILD_DESCRIPTION}" \
-    org.opencontainers.image.vendor="Home Assistant Add-ons" \
-    org.opencontainers.image.authors="alexbelgium (https://github.com/alexbelgium)" \
-    org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.url="https://github.com/alexbelgium" \
-    org.opencontainers.image.source="https://github.com/${BUILD_REPOSITORY}" \
-    org.opencontainers.image.documentation="https://github.com/${BUILD_REPOSITORY}/blob/main/README.md" \
-    org.opencontainers.image.created=${BUILD_DATE} \
-    org.opencontainers.image.revision=${BUILD_REF} \
-    org.opencontainers.image.version=${BUILD_VERSION}
-
-####################
-# 6 HealthcheckNOT #
-####################
+# Define the command to run
+ENTRYPOINT [ "python3", "/home/mesh/bbs/server.py" ]
